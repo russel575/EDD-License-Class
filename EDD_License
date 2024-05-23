@@ -1,0 +1,394 @@
+<?php
+
+class EDD_License{
+
+
+	// this is the URL our updater / license checker pings. This should be the URL of the site with EDD installed
+	private $store_url = 'https://example.com';
+
+	// the download ID for the product in Easy Digital Downloads
+	private $item_id = 2233;
+
+	// Set item name, plugin forder name and Edd item slug name must be same
+	private $item_name = 'example-plugin';
+
+	// Plugin version
+	private $plugin_version = PLUGIN_VERSION_PRO;
+
+	// Plugin Text Domain
+	private $plugin_textdomain = PLUGIN_TEXTDOMAIN;
+
+	// Plugin Name
+	private $plugin_name = PLUGIN_NAME;
+	
+	// License page parent slug
+	private $parent_slug = 'page-parent-slug';
+
+	// the name of the settings page for the license input to be displayed
+	private $license_page = 'license-page';
+
+	// License key 
+	private $license_key = 'license_key';
+
+	// License Status
+	private $license_status = 'license_status';
+
+	// Form Nonce key
+	private $nonce_key = '_nonce';
+
+	// Set transient
+	private $transient = '_transient';
+
+	// License Activate form input name
+	private $license_activate_form_name = 'license_activate';
+
+	// License deactivate form input name
+	private $license_deactivate_form_name = 'license_deactivate';
+
+
+	public function __construct(){
+
+		add_action( 'admin_init', [$this, 'sl_plugin_updater'], 0 );
+		add_action( 'admin_notices', [$this, 'sl_activation_admin_notices'], 0 );
+		add_action( 'admin_menu', [$this, 'license_menu_page'], 100 );
+		add_action( 'admin_init', [$this, 'license_activation'] );
+		add_action( 'admin_init', [$this, 'license_deactivation'] );
+
+		if( !class_exists( 'EDD_SL_Plugin_Updater' ) ) {
+			// load our custom updater
+			require plugin_dir_path( __FILE__ ) . '../helper/EDD_SL_Plugin_Updater.php';
+		}
+
+	}
+
+	function sl_plugin_updater() {
+
+		// retrieve our license key from the DB
+		$license_key = trim( get_option( $this->license_key ) );
+
+		// setup the updater
+		$edd_updater = new EDD_SL_Plugin_Updater( $this->store_url, __FILE__,
+			array(
+				'version'   => $this->plugin_version, // current version number
+				'license'   => $license_key, // license key (used get_option above to retrieve from DB)
+				'item_name' => $this->item_name,
+				'item_id'   => $this->item_id, // ID of the product
+				'author'    => 'TheInnovs', // author of this plugin not important
+				'beta'      => false,
+			)
+		);
+
+	}
+
+	/**
+	 * Plugin license page
+	 */
+
+	function license_menu_page() {
+
+		$parent_slug = $this->parent_slug;
+		$capability = 'manage_options';
+		add_submenu_page( $parent_slug, 'Active License', 'Active License', $capability, $this->license_page, [$this, 'license_page_cb'] );
+
+	}
+
+	/**
+	 * License page call back
+	 */
+	function license_page_cb() {
+
+		$license = get_option( $this->license_key );
+		$status  = get_option( $this->license_status );
+
+		?>
+		<div class="wrap">
+			<div class="elementor-exterder-pro-license">
+				
+				<?php if( false !== $license && $status !== false && $status == 'valid' ) { ?>
+
+					<h2><?php _e('Congratulations! License is activated', $this->plugin_textdomain ); ?></h2>
+
+					<?php }else{ ?>
+					<h2><?php sprintf( __('Activate %s license', $this->plugin_textdomain ), $this->plugin_name ); ?></h2>
+					
+				<?php } ?>
+
+				<form method="post" action="">
+					<table class="license-table">
+						<tbody>
+						<?php if( false !== $license && $status !== false && $status == 'valid' ) { ?>
+						
+							<div class="rm-license-status">
+								<span style="color:#fff; background:green; cursor: none;" class="veqb-active-btn button-secondary"><?php _e('Activated'); ?></span>
+
+								<?php wp_nonce_field( $this->nonce_key, $this->nonce_key ); ?>
+								<input type="submit" class="button-secondary" name="<?php echo $this->license_deactivate_form_name; ?>" value="<?php _e('Deactivate License'); ?>" />
+							</div>
+							
+						<?php }else{
+
+							wp_nonce_field( $this->nonce_key, $this->nonce_key ); ?>
+
+							<tr valign="top">
+								<th scope="row" valign="top"></th>
+
+								<td>
+									<input id="<?php echo $this->license_key; ?>" name="<?php echo $this->license_key; ?>" type="password" class="regular-text" value="<?php esc_attr_e( $license ); ?>" /> <br>
+									<label class="description" for="<?php echo $this->license_key; ?>"><?php _e('Enter your license key'); ?></label>
+								</td>
+
+								<td>
+									<input type="submit" class="button-secondary" name="<?php echo $this->license_activate_form_name; ?>" value="<?php _e('Activate License'); ?>" />
+								</td>
+							</tr>
+						
+						<?php } ?>
+
+						</tbody>
+					</table>
+				</form>
+				
+			</div>
+		</div>
+	<?php
+	}
+
+	/**
+	 * License activation method, handle license activation system by this method
+	 */
+	function license_activation() {
+
+		// listen for our activate button to be clicked
+		if( $_SERVER['REQUEST_METHOD'] === 'POST' && isset( $_POST[$this->license_activate_form_name] ) ) {
+
+			// run a quick security check
+			if( ! check_admin_referer( $this->nonce_key, $this->nonce_key ) )
+				return; // get out if we didn't click the Activate button
+
+			// store license key in db
+			update_option($this->license_key, trim(isset($_POST[$this->license_key]) ? $_POST[$this->license_key] : ''));
+
+			// retrieve the license from the database
+			$license = trim( get_option( $this->license_key ) );
+
+
+			// data to send in our API request
+			$api_params = array(
+				'edd_action' => 'activate_license',
+				'license'    => $license,
+				'item_name'  => urlencode( $this->item_name ), // the name of our product in EDD
+				'url'        => home_url()
+			);
+
+			// Call the custom API.
+			$response = wp_remote_post( $this->store_url, array( 'timeout' => 15, 'sslverify' => false, 'body' => $api_params ) );
+
+			// make sure the response came back okay
+			if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
+
+				if ( is_wp_error( $response ) ) {
+					$message = $response->get_error_message();
+				} else {
+					$message = __( 'An error occurred, please try again.' );
+				}
+
+			} else {
+
+				$license_data = json_decode( wp_remote_retrieve_body( $response ) );
+
+				if ( false === $license_data->success ) {
+
+					switch( $license_data->error ) {
+
+						case 'expired' :
+
+							$message = sprintf(
+								__( 'Your license key expired on %s.' ),
+								date_i18n( get_option( 'date_format' ), strtotime( $license_data->expires, current_time( 'timestamp' ) ) )
+							);
+							break;
+
+						case 'disabled' :
+						case 'revoked' :
+
+							$message = sprintf( __('%s license key has been disabled.' ), $this->plugin_name);
+							break;
+
+						case 'missing' :
+
+							$message = sprintf( __( 'Invalid license of %s' ), $this->plugin_name );
+							break;
+
+						case 'invalid' :
+						case 'site_inactive' :
+
+							$message = sprintf( __( '%s license is not active for this URL.' ), $this->plugin_name );
+							break;
+
+						case 'item_name_mismatch' :
+
+							$message = sprintf( __( 'This appears to be an invalid license key for %s.' ), $this->item_name );
+							break;
+
+						case 'no_activations_left':
+
+							$message = sprintf( __( '%s license key has reached its activation limit.' ), $this->plugin_name );
+							break;
+
+						default :
+
+							$message = __( 'An error occurred, please try again.' );
+							break;
+					}
+
+				}
+
+			}
+
+			// Check if anything passed on a message constituting a failure
+			if ( ! empty( $message ) ) {
+				$base_url = admin_url( 'admin.php?page=' . $this->license_page );
+				$redirect = add_query_arg( array( 'sl_activation' => 'false', 'message' => urlencode( $message ) ), $base_url );
+
+				wp_redirect( $redirect );
+				exit();
+			}
+
+			// $license_data->license will be either "valid" or "invalid"
+
+			update_option( $this->license_status, $license_data->license );
+			wp_redirect( admin_url( 'admin.php?page=' . $this->license_page ) );
+			exit();
+		}
+	}
+
+	/**
+	 * License Deactivation method, handle license deactivation system by this method
+	 */
+	function license_deactivation() {
+
+		// listen for our activate button to be clicked
+		if( $_SERVER['REQUEST_METHOD'] === 'POST' && isset( $_POST[$this->license_deactivate_form_name] ) ) {
+
+			// run a quick security check
+			if( ! check_admin_referer( $this->nonce_key, $this->nonce_key ) )
+				return; // get out if we didn't click the Activate button
+
+			// retrieve the license from the database
+			$license = trim( get_option( $this->license_key ) );
+
+
+			// data to send in our API request
+			$api_params = array(
+				'edd_action' => 'deactivate_license',
+				'license'    => $license,
+				'item_name'  => urlencode( $this->item_name ), // the name of our product in EDD
+				'url'        => home_url()
+			);
+
+			// Call the custom API.
+			$response = wp_remote_post( $this->store_url, array( 'timeout' => 15, 'sslverify' => false, 'body' => $api_params ) );
+
+			// make sure the response came back okay
+			if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
+
+				if ( is_wp_error( $response ) ) {
+					$message = $response->get_error_message();
+				} else {
+					$message = __( 'An error occurred, please try again.' );
+				}
+
+				$base_url = admin_url( 'admin.php?page=' . $this->license_page );
+				$redirect = add_query_arg( array( 'sl_activation' => 'false', 'message' => urlencode( $message ) ), $base_url );
+
+				wp_redirect( $redirect );
+				exit();
+			}
+
+			// decode the license data
+			$license_data = json_decode( wp_remote_retrieve_body( $response ) );
+
+			// $license_data->license will be either "deactivated" or "failed"
+			if( $license_data->license == 'deactivated' ) {
+				delete_option( $this->license_status );
+				delete_transient( $this->license_status );
+
+			}
+
+			wp_redirect( admin_url( 'admin.php?page=' . $this->license_page ) );
+			exit();
+
+		}
+	}
+
+	/**
+	 * Check license valid or not and check has any update or not
+	 */
+
+	function can_we_include_file() {
+
+		global $wp_version;
+
+		$current_status = get_transient( $this->transient );
+
+		if(!$current_status){
+			$license = trim( get_option( $this->license_key ) );
+
+			$api_params = array(
+				'edd_action' => 'check_license',
+				'license' 	=> $license,
+				'item_name' => urlencode( $this->item_name ),
+				'url'       => home_url()
+			);
+
+			// Call the custom API.
+			$response = wp_remote_post( $this->store_url, array( 'timeout' => 15, 'sslverify' => false, 'body' => $api_params ) );
+
+			if ( is_wp_error( $response ) )
+				return false;
+
+			$license_data = json_decode( wp_remote_retrieve_body( $response ) );
+
+			if( $license_data->license == 'valid' ) {
+
+				set_transient( $this->transient, 1, 60 * 60 * 24);
+				return 1;
+
+			} else {
+				return 0;
+			}
+		}else{
+			return 1;
+		}	
+	}
+
+	/**
+	 * This is a means of catching errors from the activation method above and displaying it to the customer
+	 */
+	function sl_activation_admin_notices() {
+
+		if ( isset( $_GET['sl_activation'] ) && ! empty( $_GET['message'] ) ) {
+
+			switch( $_GET['sl_activation'] ) {
+
+				case 'false':
+					$message = urldecode( $_GET['message'] );
+					?>
+					<div class="error">
+						<p><?php echo esc_attr($message); ?></p>
+					</div>
+					<?php
+					break;
+
+				case 'true':
+				default:
+					// Developers can put a custom success message here for when activation is successful if they way.
+					break;
+
+			}
+		}
+	}
+	
+}
+
+new EDD_License;
